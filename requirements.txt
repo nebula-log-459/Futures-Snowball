@@ -1,0 +1,6 @@
+akshare
+pandas
+numpy
+matplotlib
+python-dateutil
+tkcalendar
