@@ -20,6 +20,14 @@
   - 提供未敲入未敲出（红利收益）的保底测算。
 - **数据与报表导出**：支持将底层的每一笔状态判定明细（如某天是观察日、某天触发敲出）及收益测算表格一键导出为 CSV。
 
+<div align="center">
+  <img src="./页面展示1.png" width="80%" />
+  <p>主界面及回测参数设置</p>
+  
+  <img src="./页面展示2.png" width="80%" />
+  <p>收益测算与动态图表展示</p>
+</div>
+
 ## 🛠️ 技术栈
 - **前端界面**：Tkinter / ttk
 - **数据可视化**：Matplotlib (LineCollection 渲染、mpl_connect 事件监听)
