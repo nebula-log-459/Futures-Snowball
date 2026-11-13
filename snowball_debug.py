@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-雪球判定过程诊断（与 snowball.py 逻辑严格同步）
+雪球判定过程诊断（自然日30天滚动观察版）
 """
 import math
 from dateutil.relativedelta import relativedelta
@@ -22,7 +22,6 @@ def _month_diff(d1, d2):
     rounded = math.ceil(total * 2) / 2
     return max(rounded, 0.5)
 
-
 def evaluate_one_point(dt_list, prices, i, out_pct, in_pct,
                         duration_weeks, ki_freq, ko_freq, lockup_weeks):
     A_date = dt_list[i]
@@ -42,9 +41,10 @@ def evaluate_one_point(dt_list, prices, i, out_pct, in_pct,
     ko_date = None
 
     steps = []
-    current_month = None
-    month_day_count = 0
     end_price = None
+    
+    last_ki_cycle = -1
+    last_ko_cycle = -1
 
     for j in range(i + 1, len(dt_list)):
         D_date = dt_list[j]
@@ -56,37 +56,42 @@ def evaluate_one_point(dt_list, prices, i, out_pct, in_pct,
             break
 
         end_price = float(prices[j])
-
-        if D_date.month != current_month:
-            current_month = D_date.month
-            month_day_count = 1
-        else:
-            month_day_count += 1
-
         P = float(prices[j])
+        days_diff = (D_date - A_date).days
         
         is_ko_day = False
         if D_date >= lockup_end:
             if ko_freq[0] == "daily": is_ko_day = True
             elif ko_freq[0] == "weekly" and D_date.weekday() == ko_freq[1]: is_ko_day = True
-            elif ko_freq[0] == "monthly" and month_day_count == ko_freq[1]: is_ko_day = True
+            elif ko_freq[0] == "monthly":
+                cycle = days_diff // 30
+                if cycle >= 1 and cycle > last_ko_cycle:
+                    last_ko_cycle = cycle
+                    is_ko_day = True
         else:
             steps.append((j, D_date, P, "锁定期", "未过锁定期，不判敲出"))
 
         is_ki_day = False
         if ki_freq[0] == "daily": is_ki_day = True
         elif ki_freq[0] == "weekly" and D_date.weekday() == ki_freq[1]: is_ki_day = True
-        elif ki_freq[0] == "monthly" and month_day_count == ki_freq[1]: is_ki_day = True
+        elif ki_freq[0] == "monthly":
+            cycle = days_diff // 30
+            if cycle > last_ki_cycle:
+                last_ki_cycle = cycle
+                is_ki_day = True
 
-        # 敲出
+        # 敲出判定
         if is_ko_day and P >= out_price:
             knocked_out = True
             ko_date = D_date
             ko_month = _month_diff(A_date, D_date)
             steps.append((j, D_date, P, "敲出", f"价格 {P:.2f} >= 敲出价 {out_price:.2f}"))
             break
+        elif is_ko_day:
+            # 【新增】：如果今天是观察日，但价格没达标，记录下来！
+            steps.append((j, D_date, P, "敲出观察日", "未达标"))
 
-        # 敲入
+        # 敲入判定
         if is_ki_day:
             if P <= in_price:
                 if not knocked_in:
@@ -97,20 +102,21 @@ def evaluate_one_point(dt_list, prices, i, out_pct, in_pct,
                 else:
                     steps.append((j, D_date, P, "再次敲入", f"重置回升标记"))
             else:
-                steps.append((j, D_date, P, "普通", ""))
+                # 【新增】：如果今天是敲入观察日，但价格没跌破，记录下来！
+                steps.append((j, D_date, P, "敲入观察日", "未跌破"))
+        else:
+            steps.append((j, D_date, P, "普通", ""))
 
-    # 如果由于数据不够导致根本没触发过窗口结束
     if end_price is None:
         end_price = float(prices[-1])
 
-    # 颜色判定（新逻辑）
     if knocked_out:
         color = COLOR_GREEN
     elif not full_window:
         color = COLOR_GRAY
     else:
         if knocked_in:
-            if end_price > A_price:
+            if end_price >= A_price:
                 color = COLOR_YELLOW
             else:
                 color = COLOR_RED

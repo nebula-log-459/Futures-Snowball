@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-雪球策略判定算法（最新逻辑）
+雪球策略判定算法（自然日30天滚动观察版）
 """
 
 import math
@@ -17,15 +17,6 @@ COLOR_GRAY   = "gray"    # 数据不足
 
 def compute_snowball(dates, prices, out_pct, in_pct, duration_weeks,
                      ki_freq, ko_freq, lockup_weeks=0):
-    """
-    参数:
-        dates: list 或 pd.Series
-        prices: list 或 pd.Series
-        out_pct, in_pct: 敲出/敲入百分比
-        duration_weeks: 总时长(周)
-        ki_freq, ko_freq: 观察频率 tuple 如 ("weekly", 0), ("monthly", 1)
-        lockup_weeks: 锁定期(周)
-    """
     if isinstance(dates, pd.Series):
         dates = dates.tolist()
     if isinstance(prices, pd.Series):
@@ -42,91 +33,103 @@ def compute_snowball(dates, prices, out_pct, in_pct, duration_weeks,
         out_price = A_price * out_pct / 100.0
         in_price = A_price * in_pct / 100.0
 
-        # 目标到期日与锁定期边界
         target_end = A_date + relativedelta(weeks=duration_weeks)
         lockup_end = A_date + relativedelta(weeks=lockup_weeks)
 
         knocked_in = False
         knocked_out = False
         ko_month = 0
-
-        current_month = None
-        month_day_count = 0
+        
+        # 精准的时间跨度记录
+        hold_days = duration_weeks * 7 
+        hold_weeks = duration_weeks
+        
         end_price = None
+
+        # 用于“30天滚动月观察”的记录器
+        last_ki_cycle = -1
+        last_ko_cycle = -1
 
         for j in range(i + 1, n):
             D_date = dt_list[j]
             
-            # 超出目标周期，记录期末价并停止遍历
             if D_date > target_end:
-                # 如果前一天还没被赋值，说明前一天就是窗口内的最后一天
                 if end_price is None:
                     end_price = float(prices[j - 1]) if j > i else A_price
                 break
 
-            # 记录每天的价格，随着遍历不断更新，直到到达窗口结尾
             end_price = float(prices[j])
-
-            # 统计当月第几个交易日
-            if D_date.month != current_month:
-                current_month = D_date.month
-                month_day_count = 1
-            else:
-                month_day_count += 1
-
             P = float(prices[j])
+            
+            days_diff = (D_date - A_date).days
 
-            # ---------- 1. 判定敲出 (优先级最高) ----------
+            # ---------------- 判定敲出 ----------------
             if D_date >= lockup_end:
                 is_ko_day = False
                 if ko_freq[0] == "daily":
                     is_ko_day = True
                 elif ko_freq[0] == "weekly" and D_date.weekday() == ko_freq[1]:
                     is_ko_day = True
-                elif ko_freq[0] == "monthly" and month_day_count == ko_freq[1]:
-                    is_ko_day = True
+                elif ko_freq[0] == "monthly":
+                    # 自然日 30 天滚动逻辑
+                    cycle = days_diff // 30
+                    if cycle >= 1 and cycle > last_ko_cycle:
+                        last_ko_cycle = cycle
+                        is_ko_day = True
 
                 if is_ko_day and P >= out_price:
                     knocked_out = True
                     ko_month = _month_diff(A_date, D_date)
+                    hold_days = days_diff
+                    hold_weeks = max(1, round(days_diff / 7))
                     break
 
-            # ---------- 2. 判定敲入 ----------
+            # ---------------- 判定敲入 ----------------
             is_ki_day = False
             if ki_freq[0] == "daily":
                 is_ki_day = True
             elif ki_freq[0] == "weekly" and D_date.weekday() == ki_freq[1]:
                 is_ki_day = True
-            elif ki_freq[0] == "monthly" and month_day_count == ki_freq[1]:
-                is_ki_day = True
+            elif ki_freq[0] == "monthly":
+                # 自然日 30 天滚动逻辑
+                cycle = days_diff // 30
+                if cycle > last_ki_cycle:
+                    last_ki_cycle = cycle
+                    is_ki_day = True
 
             if is_ki_day and P <= in_price:
                 knocked_in = True
 
-        # 如果循环到数据末尾都没超过 target_end，说明数据缺失
         full_window = last_date >= target_end
 
-        # ---------- 颜色判定 (新逻辑) ----------
+        # 颜色判定
         if knocked_out:
             color = COLOR_GREEN
         elif not full_window:
             color = COLOR_GRAY
+            hold_days = 0 
+            hold_weeks = 0
         else:
-            # 走到这里说明没敲出，且走完了完整周期
             if knocked_in:
-                if end_price > A_price:
+                if end_price >= A_price:
                     color = COLOR_YELLOW
                 else:
                     color = COLOR_RED
             else:
                 color = COLOR_BLUE
+            # 没敲出的，按满期算
+            hold_days = (target_end - A_date).days
+            hold_weeks = duration_weeks
 
         results.append({
             "index": i,
             "date": dates[i],
             "price": A_price,
+            "end_price": end_price,
             "color": color,
             "ko_month": ko_month,
+            "hold_days": hold_days,
+            "hold_weeks": hold_weeks,
         })
 
     return results

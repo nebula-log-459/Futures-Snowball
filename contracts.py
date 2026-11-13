@@ -3,6 +3,7 @@
 合约列表管理层
 - 从六个交易所 futures_contract_info_* 接口拉取全部期货合约
 - 从 futures_display_main_sina 拉取主连，并对 DCE/GFEX 进行日线接口探测兜底
+- 【新增】加入股票指数虚拟交易所
 - 组织成 交易所 → 品种 → [合约代码] 三级结构
 - 缓存为 JSON，有效期 7 天
 """
@@ -26,6 +27,7 @@ EXCHANGE_NAMES = {
     "cffex": "中国金融期货交易所",
     "ine":   "上海国际能源交易中心",
     "gfex":  "广州期货交易所",
+    "index": "股票指数",       # 【新增】虚拟交易所
 }
 
 FALLBACK_NAMES = {
@@ -50,7 +52,6 @@ FALLBACK_NAMES = {
     "ts": "2年期国债", "tf": "5年期国债", "t": "10年期国债", "tl": "30年期国债",
 }
 
-# 大商所和广期所备用主连代码字典（用于日线接口探测兜底）
 BACKUP_MAIN_CONTRACTS = {
     "dce": {
         "豆一主连": "A0", "豆二主连": "B0", "豆粕主连": "M0", "豆油主连": "Y0",
@@ -65,7 +66,6 @@ BACKUP_MAIN_CONTRACTS = {
 }
 
 
-# ==================== 合约管理器 ====================
 class ContractManager:
     def __init__(self, cache_file=CACHE_FILE, max_age_days=MAX_AGE_DAYS):
         self.cache_file = Path(cache_file)
@@ -73,7 +73,6 @@ class ContractManager:
         self.data = {}
         self.updated_at = None
 
-    # ---------- 缓存 ----------
     def _cache_valid(self):
         if not self.cache_file.exists():
             return False
@@ -99,7 +98,6 @@ class ContractManager:
                 "data": self.data,
             }, f, ensure_ascii=False, indent=2)
 
-    # ---------- 加载 ----------
     def load(self, force_refresh=False):
         if not force_refresh and self._cache_valid():
             print(f"[合约列表] 使用缓存 (更新于 {self.updated_at:%Y-%m-%d %H:%M})")
@@ -119,8 +117,10 @@ class ContractManager:
         self._fetch_gfex(name_map)
         self._fetch_cffex(name_map)
 
-        # 最后追加主连（包含 DCE/GFEX 的探测兜底）
         self._safe_add_main_contracts()
+        
+        # 【新增】注入股票指数
+        self._add_stock_indexes()
 
         self._save_cache()
         total_v = sum(len(v) for v in self.data.values())
@@ -129,10 +129,17 @@ class ContractManager:
               f"{total_v} 个品种, {total_c} 个合约")
         return self.data
 
-    # ---------- 主连添加逻辑 ----------
+    def _add_stock_indexes(self):
+        """注入四大股票指数"""
+        indexes = {
+            "沪深300": ["sh000300"],
+            "上证50": ["sh000016"],
+            "中证500": ["sh000905"],
+            "中证1000": ["sh000852"]
+        }
+        self.data["index"] = indexes
+
     def _safe_add_main_contracts(self):
-        """带安全探测的主连添加逻辑"""
-        # 1. 跑原来的新浪列表逻辑
         try:
             df = ak.futures_display_main_sina()
             for _, row in df.iterrows():
@@ -149,7 +156,6 @@ class ContractManager:
         except Exception as e:
             print(f"[主连] 列表接口失败: {e}")
 
-        # 2. 针对 DCE 和 GFEX，探测日线接口是否有数据，有才加入
         print("[主连] 正在探测 DCE 和 GFEX 的备用主连数据...")
         for ex, data in BACKUP_MAIN_CONTRACTS.items():
             if ex not in self.data:
@@ -163,11 +169,9 @@ class ContractManager:
                     test_df = ak.futures_zh_daily_sina(symbol=code)
                     if test_df is not None and not test_df.empty:
                         self.data[ex][name] = [code]
-                        # print(f"  -> 探测成功，加入 {name} ({code})")
                 except Exception:
                     pass
 
-    # ---------- 中文名映射 ----------
     @staticmethod
     def _load_sina_names():
         result = {}
@@ -186,7 +190,6 @@ class ContractManager:
         code = variety_code.lower()
         return name_map.get(code) or FALLBACK_NAMES.get(code, variety_code.upper())
 
-    # ---------- 各交易所 ----------
     @staticmethod
     def _recent_dates(n=10):
         today = datetime.today()
@@ -287,9 +290,8 @@ class ContractManager:
             except Exception:
                 continue
 
-    # ---------- 对外查询 ----------
     def get_exchanges(self):
-        order = ["shfe", "dce", "czce", "ine", "gfex", "cffex"]
+        order = ["shfe", "dce", "czce", "cffex", "ine", "gfex", "index"]
         return [EXCHANGE_NAMES[c] for c in order if c in self.data]
 
     def exchange_code(self, cn_name):
@@ -309,7 +311,7 @@ class ContractManager:
         print("\n" + "=" * 70)
         print("合约列表统计")
         print("=" * 70)
-        for code in ["shfe", "dce", "czce", "ine", "gfex", "cffex"]:
+        for code in ["shfe", "dce", "czce", "ine", "gfex", "cffex", "index"]:
             if code not in self.data:
                 continue
             varieties = self.data[code]
